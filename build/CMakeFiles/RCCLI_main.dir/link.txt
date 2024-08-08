@@ -1,3 +1,0 @@
-"C:\Program Files\Raspberry Pi\Pico SDK v1.5.1\cmake\bin\cmake.exe" -E rm -f CMakeFiles\RCCLI_main.dir/objects.a
-C:\msys64\mingw64\bin\ar.exe qc CMakeFiles\RCCLI_main.dir/objects.a @CMakeFiles\RCCLI_main.dir\objects1
-C:\msys64\mingw64\bin\g++.exe -g -Xlinker --print-memory-usage -Wl,--whole-archive CMakeFiles\RCCLI_main.dir/objects.a -Wl,--no-whole-archive -o RCCLI_main.exe -Wl,--out-implib,libRCCLI_main.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\RCCLI_main.dir\linkLibs.rsp

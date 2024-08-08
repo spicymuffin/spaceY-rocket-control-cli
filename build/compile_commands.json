@@ -1,7 +1,0 @@
-[
-{
-  "directory": "C:/Users/luigi/Desktop/github/spaceY-rocket-control-cli/build",
-  "command": "C:\\msys64\\mingw64\\bin\\g++.exe  @CMakeFiles/RCCLI_main.dir/includes_CXX.rsp -g -std=gnu++17 -o CMakeFiles\\RCCLI_main.dir\\src\\main.cpp.obj -c C:\\Users\\luigi\\Desktop\\github\\spaceY-rocket-control-cli\\src\\main.cpp",
-  "file": "C:/Users/luigi/Desktop/github/spaceY-rocket-control-cli/src/main.cpp"
-}
-]

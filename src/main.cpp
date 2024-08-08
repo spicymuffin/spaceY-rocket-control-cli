@@ -3,25 +3,14 @@
 #include <Windows.h>
 #include <vector>
 #include <iostream>
-
-/*
-Console coordinate system:
-
-+-----------------X increasing
-|
-|
-|
-|
-|
-Y increasing
-
-*/
+#include <string>
 
 // drawing
 const unsigned FPS = 24;
 std::vector<char> frame_data;
+std::string input_text;
 
-// get the intial console buffer.
+// get the initial console buffer.
 auto first_buffer = GetStdHandle(STD_OUTPUT_HANDLE);
 
 // create an additional buffer for switching.
@@ -57,45 +46,38 @@ void swapBuffers()
     std::this_thread::sleep_for(std::chrono::milliseconds(1000 / FPS));
 }
 
-short cursor = 0;
-
-int get_line_start_index(COORD screen_size, short line)
+void handle_input()
 {
-    return line * screen_size.X;
-}
+    INPUT_RECORD inputRecords[128];
+    DWORD eventsRead;
+    HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
 
-// draw horizontal line moving from top to bottom.
-void draw_frame(COORD screen_size)
-{
-    int line_start_index = get_line_start_index(screen_size, 20);
+    ReadConsoleInput(hInput, inputRecords, 128, &eventsRead);
 
-    for (auto i = 0; i < screen_size.Y; i++)
-    {
-        for (auto j = 0; j < screen_size.X; j++)
-        {
-            if (i == 20)
-            {
-                frame_data[screen_size.X * i + j] = '-';
-            }
-            else
-            {
-                frame_data[screen_size.X * i + j] = ' ';
+    for (DWORD i = 0; i < eventsRead; ++i) {
+        if (inputRecords[i].EventType == KEY_EVENT) {
+            KEY_EVENT_RECORD keyEvent = inputRecords[i].Event.KeyEvent;
+            if (keyEvent.bKeyDown) {
+                if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126) {
+                    input_text.push_back(keyEvent.uChar.UnicodeChar);
+                } else if (keyEvent.uChar.UnicodeChar == '\b' && !input_text.empty()) {
+                    input_text.pop_back();
+                }
             }
         }
     }
+}
 
-    // for (auto i = 0; i < screen_size.Y; i++)
-    // {
-    //     for (auto j = 0; j < screen_size.X; j++)
-    //         if (cursor == i)
-    //             frame_data[i * screen_size.X + j] = '@';
-    //         else
-    //             frame_data[i * screen_size.X + j] = ' ';
-    // }
+// draw frame with user input text.
+void draw_frame(COORD screen_size)
+{
+    frame_data.assign(screen_size.X * screen_size.Y, ' ');
 
-    // cursor++;
-    // if (cursor >= screen_size.Y)
-    //     cursor = 0;
+    // Draw input text at the bottom of the console
+    int input_line_index = screen_size.Y - 1;
+    for (size_t i = 0; i < input_text.size() && i < screen_size.X; ++i) {
+        frame_data[input_line_index * screen_size.X + i] = input_text[i];
+    }
 }
 
 int main()
@@ -105,41 +87,16 @@ int main()
     SetConsoleScreenBufferSize(second_buffer, screen_size);
     frame_data.resize(screen_size.X * screen_size.Y);
 
-    // main rendering loop:
-    // 1. draw frame to the back buffer
-    // 2. set back buffer as active
+    // Flush the console input buffer to remove any existing inputs
+    // FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
 
+    // main rendering loop:
     while (true)
     {
+        handle_input();
         draw_frame(screen_size);
         swapBuffers();
     }
+
+    return 0;
 }
-
-// int main() {
-//     HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-//     INPUT_RECORD inputRecord;
-//     DWORD eventsRead;
-
-//     // Set up the console to receive input events
-//     while (TRUE) {
-//         // Read input events one by one
-//         ReadConsoleInput(hInput, &inputRecord, 1, &eventsRead);
-
-//         if (inputRecord.EventType == KEY_EVENT) {
-//             KEY_EVENT_RECORD keyEvent = inputRecord.Event.KeyEvent;
-
-//             // Check if the key is pressed down
-//             if (keyEvent.bKeyDown) {
-//                 printf("Key code: %u\n", keyEvent.wVirtualKeyCode);
-
-//                 // Exit loop if 'ESC' key is pressed
-//                 if (keyEvent.wVirtualKeyCode == VK_ESCAPE) {
-//                     break;
-//                 }
-//             }
-//         }
-//     }
-
-//     return 0;
-// }
