@@ -8,13 +8,11 @@
 // drawing
 const unsigned FPS = 24;
 std::vector<char> frame_data;
-std::string input_text;
-size_t cursor_position = 0; // Track where the cursor is in the input text
 
-// get the initial console buffer.
+// get the initial console buffer
 auto first_buffer = GetStdHandle(STD_OUTPUT_HANDLE);
 
-// create an additional buffer for switching.
+// create an additional buffer for switching
 auto second_buffer = CreateConsoleScreenBuffer(
     GENERIC_READ | GENERIC_WRITE,
     FILE_SHARE_WRITE | FILE_SHARE_READ,
@@ -22,11 +20,11 @@ auto second_buffer = CreateConsoleScreenBuffer(
     CONSOLE_TEXTMODE_BUFFER,
     nullptr);
 
-// assign switchable back buffer.
+// assign switchable back buffer
 HANDLE back_buffer = second_buffer;
 bool buffer_switch = true;
 
-// returns current window size in rows and columns.
+// returns current window size in rows and columns
 COORD get_screen_size()
 {
     CONSOLE_SCREEN_BUFFER_INFO buffer_info;
@@ -37,7 +35,7 @@ COORD get_screen_size()
     return COORD{ static_cast<short>(new_screen_width), static_cast<short>(new_screen_height) };
 }
 
-// switches back buffer as active.
+// switches back buffer as active
 void swapBuffers()
 {
     WriteConsole(back_buffer, &frame_data.front(), static_cast<short>(frame_data.size()), nullptr, nullptr);
@@ -47,6 +45,10 @@ void swapBuffers()
     std::this_thread::sleep_for(std::chrono::milliseconds(1000 / FPS));
 }
 
+// input
+std::string input_text;
+size_t cursor_position = 0; // Track where the cursor is in the input text
+
 void handle_input()
 {
     INPUT_RECORD inputRecords[128];
@@ -55,49 +57,84 @@ void handle_input()
 
     ReadConsoleInput(hInput, inputRecords, 128, &eventsRead);
 
-    for (DWORD i = 0; i < eventsRead; ++i) {
-        if (inputRecords[i].EventType == KEY_EVENT) {
+    for (DWORD i = 0; i < eventsRead; ++i)
+    {
+        if (inputRecords[i].EventType == KEY_EVENT)
+        {
             KEY_EVENT_RECORD keyEvent = inputRecords[i].Event.KeyEvent;
-            if (keyEvent.bKeyDown) {
-                switch (keyEvent.wVirtualKeyCode) {
-                    case VK_LEFT:
-                        if (cursor_position > 0) cursor_position--;
-                        break;
-                    case VK_RIGHT:
-                        if (cursor_position < input_text.length()) cursor_position++;
-                        break;
-                    case VK_BACK:
-                        if (!input_text.empty() && cursor_position > 0) {
-                            input_text.erase(cursor_position - 1, 1);
-                            cursor_position--;
-                        }
-                        break;
-                    default:
-                        if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126) {
-                            input_text.insert(cursor_position, 1, keyEvent.uChar.UnicodeChar);
-                            cursor_position++;
-                        }
-                        break;
+            if (keyEvent.bKeyDown)
+            {
+                switch (keyEvent.wVirtualKeyCode)
+                {
+                case VK_LEFT:
+                    if (cursor_position > 0) cursor_position--;
+                    break;
+                case VK_RIGHT:
+                    if (cursor_position < input_text.length()) cursor_position++;
+                    break;
+                case VK_BACK:
+                    if (!input_text.empty() && cursor_position > 0)
+                    {
+                        input_text.erase(cursor_position - 1, 1);
+                        cursor_position--;
+                    }
+                    break;
+                case VK_DELETE:
+                    if (!input_text.empty() && cursor_position > 0)
+                    {
+                        input_text.erase(cursor_position, 1);
+                    }
+                    break;
+                default:
+                    if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126)
+                    {
+                        input_text.insert(cursor_position, 1, keyEvent.uChar.UnicodeChar);
+                        cursor_position++;
+                    }
+                    break;
                 }
             }
         }
     }
 }
 
-// draw frame with user input text.
+// ----------------------------
+//       cursor visuals
+// ----------------------------
+
+bool show_cursor = true;
+std::chrono::milliseconds cursor_interval(500);
+auto last_toggle = std::chrono::steady_clock::now();
+
+
+// draw frame with user input text
 void draw_frame(COORD screen_size)
 {
     frame_data.assign(screen_size.X * screen_size.Y, ' ');
 
     // Draw input text at the bottom of the console
     int input_line_index = screen_size.Y - 1;
-    for (size_t i = 0; i < input_text.size() && i < screen_size.X; ++i) {
+
+    for (size_t i = 0; i < input_text.size() && i < screen_size.X; ++i)
+    {
         frame_data[input_line_index * screen_size.X + i] = input_text[i];
     }
 
+    // Toggle cursor visibility
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_toggle) > cursor_interval)
+    {
+        show_cursor = !show_cursor;
+        last_toggle = now;
+    }
+
     // Display cursor
-    if (cursor_position < screen_size.X) {
-        frame_data[input_line_index * screen_size.X + cursor_position] = '|';
+    if (cursor_position < screen_size.X)
+    {
+        if (show_cursor || cursor_position >= input_text.length())
+        {
+            frame_data[input_line_index * screen_size.X + cursor_position] = '_';
+        }
     }
 }
 
