@@ -1,16 +1,27 @@
-#include <chrono>
-#include <thread>
 #include <Windows.h>
-#include <vector>
 #include <iostream>
-#include <string>
+
 #include <random>
+
+#include <thread>
+
+#include <chrono>
+#include <ctime>
+
+#include <vector>
+
+#include <string>
+#include <iomanip>
+#include <sstream>
 
 using namespace std;
 
 // drawing
 const unsigned FPS = 24;
 std::vector<char> frame_data;
+
+// time
+chrono::time_point<chrono::steady_clock> now;
 
 // get the initial console buffer
 auto first_buffer = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -39,79 +50,14 @@ COORD get_screen_size()
 }
 
 // switches back buffer as active
-void swapBuffers()
+void swap_buffers()
 {
     WriteConsole(back_buffer, &frame_data.front(), static_cast<short>(frame_data.size()), nullptr, nullptr);
     SetConsoleActiveScreenBuffer(back_buffer);
     back_buffer = buffer_switch ? first_buffer : second_buffer;
     buffer_switch = !buffer_switch;
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000 / FPS));
+    this_thread::sleep_for(chrono::milliseconds(1000 / FPS));
 }
-
-// input
-std::string input_text;
-size_t cursor_position = 0; // Track where the cursor is in the input text
-
-void handle_input()
-{
-    INPUT_RECORD inputRecords[128];
-    DWORD eventsRead;
-    HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
-
-    ReadConsoleInput(hInput, inputRecords, 128, &eventsRead);
-
-    for (DWORD i = 0; i < eventsRead; ++i)
-    {
-        if (inputRecords[i].EventType == KEY_EVENT)
-        {
-            KEY_EVENT_RECORD keyEvent = inputRecords[i].Event.KeyEvent;
-            if (keyEvent.bKeyDown)
-            {
-                switch (keyEvent.wVirtualKeyCode)
-                {
-                case VK_LEFT:
-                    if (cursor_position > 0) cursor_position--;
-                    break;
-                case VK_RIGHT:
-                    if (cursor_position < input_text.length()) cursor_position++;
-                    break;
-                case VK_BACK:
-                    if (!input_text.empty() && cursor_position > 0)
-                    {
-                        input_text.erase(cursor_position - 1, 1);
-                        cursor_position--;
-                    }
-                    break;
-                case VK_DELETE:
-                    if (!input_text.empty() && cursor_position > 0)
-                    {
-                        input_text.erase(cursor_position, 1);
-                    }
-                    break;
-                case VK_RETURN:
-                    input_text = "";
-                    cursor_position = 0;
-                    break;
-                default:
-                    if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126)
-                    {
-                        input_text.insert(cursor_position, 1, keyEvent.uChar.UnicodeChar);
-                        cursor_position++;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-}
-
-// ----------------------------
-//       cursor visuals
-// ----------------------------
-
-bool show_cursor = true;
-std::chrono::milliseconds cursor_interval(500);
-auto last_toggle = std::chrono::steady_clock::now();
 
 COORD screen_size;
 
@@ -143,6 +89,8 @@ public:
 
     vector<string> field_names;
     vector<string> field_values;
+
+    Gauge() = default;
 
     Gauge(int x, int y, int field_cnt, int field_names_len, int field_values_len, string name = "Gauge", string updrate_ms = "500ms")
     {
@@ -201,7 +149,7 @@ public:
         draw_char(x + length - 1, y, '+');
     }
 
-    void draw()
+    void init_draw()
     {
         int tmp_x = this->x;
         int tmp_y = this->y;
@@ -259,14 +207,166 @@ public:
         tmp_y++;
         draw_stick(tmp_x, tmp_y, total_length);
     }
+
+    void draw()
+    {
+        int tmp_x = this->x;
+        int tmp_y = this->y;
+
+        tmp_y++;
+
+        for (int field_index = 0; field_index < field_cnt; field_index++)
+        {
+            tmp_y++;
+
+            // draw field value
+            for (int i = 0; i < field_values_len; i++)
+            {
+                draw_char(tmp_x + 2 + field_names_len + i, tmp_y, field_values[field_index][i]);
+            }
+        }
+    }
+};
+
+class InputField
+{
+public:
+    int x, y;
+    int width;
+    chrono::milliseconds cursor_interval;
+
+
+    bool show_cursor = true;
+    string input_text = "";
+    size_t cursor_position = 0;
+    std::chrono::time_point<std::chrono::steady_clock> last_toggle;
+
+    InputField() = default;
+
+    InputField(int x, int y, int width, int cursor_interval = 500)
+    {
+        this->x = x;
+        this->y = y;
+        this->width = width;
+        this->cursor_interval = chrono::milliseconds(cursor_interval);
+
+        last_toggle = chrono::steady_clock::now();
+    }
+
+    void handle_input()
+    {
+        INPUT_RECORD inputRecords[128];
+        DWORD eventsRead;
+        HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
+
+        ReadConsoleInput(hInput, inputRecords, 128, &eventsRead);
+
+        for (DWORD i = 0; i < eventsRead; ++i)
+        {
+            if (inputRecords[i].EventType == KEY_EVENT)
+            {
+                KEY_EVENT_RECORD keyEvent = inputRecords[i].Event.KeyEvent;
+                if (keyEvent.bKeyDown)
+                {
+                    switch (keyEvent.wVirtualKeyCode)
+                    {
+                    case VK_LEFT:
+                        if (cursor_position > 0) cursor_position--;
+                        break;
+                    case VK_RIGHT:
+                        if (cursor_position < input_text.length()) cursor_position++;
+                        break;
+                    case VK_BACK:
+                        if (!input_text.empty() && cursor_position > 0)
+                        {
+                            input_text.erase(cursor_position - 1, 1);
+                            cursor_position--;
+                        }
+                        break;
+                    case VK_DELETE:
+                        if (!input_text.empty() && cursor_position > 0)
+                        {
+                            input_text.erase(cursor_position, 1);
+                        }
+                        break;
+                    case VK_RETURN:
+                        input_text = "";
+                        cursor_position = 0;
+                        break;
+                    default:
+                        if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126)
+                        {
+                            input_text.insert(cursor_position, 1, keyEvent.uChar.UnicodeChar);
+                            cursor_position++;
+                        }
+                        break;
+                    }
+                }
+                erase();
+            }
+        }
+    }
+
+    void erase()
+    {
+        int tmp_x = this->x;
+        int tmp_y = this->y;
+
+        for (size_t i = 0; i < width; ++i)
+        {
+            draw_char(tmp_x + i, tmp_y, ' ');
+        }
+    }
+
+    void draw()
+    {
+        int tmp_x = this->x;
+        int tmp_y = this->y;
+
+        // erase previous frame
+        erase();
+
+        for (size_t i = 0; i < input_text.size(); ++i)
+        {
+            draw_char(tmp_x + i, tmp_y, input_text[i]);
+        }
+
+        // toggle cursor visibility
+        auto now = chrono::steady_clock::now();
+        if (chrono::duration_cast<chrono::milliseconds>(now - last_toggle) > cursor_interval)
+        {
+            show_cursor = !show_cursor;
+            last_toggle = now;
+        }
+
+        // draw cursor
+        if (cursor_position < screen_size.X)
+        {
+            if (show_cursor)
+            {
+                draw_char(tmp_x + cursor_position, tmp_y, '_');
+            }
+            else if (!show_cursor && cursor_position >= input_text.length())
+            {
+                draw_char(tmp_x + cursor_position, tmp_y, ' ');
+            }
+        }
+    }
+
+    void draw_init()
+    {
+
+    }
 };
 
 vector<Gauge> gauges;
+InputField input_field;
 
 void init_gauges()
 {
     gauges.push_back(Gauge(0, 0, 4, 16, 8, "Gauge", "500ms"));
     gauges[0].set_field_name(0, "Data age");
+    gauges[0].init_draw();
 }
 
 void draw_gauges()
@@ -275,6 +375,12 @@ void draw_gauges()
     {
         gauge.draw();
     }
+}
+
+void init_input_field()
+{
+    input_field = InputField(75, screen_size.Y - 2, 16);
+    input_field.draw_init();
 }
 
 class Command
@@ -287,38 +393,53 @@ class Log
 
 };
 
+std::string get_current_time_string()
+{
+    // get the current time
+    time_t now = time(0);
+
+    // convert now to tm struct for local timezone
+    tm* localtm = localtime(&now);
+
+    // use a stringstream to format the time
+    std::stringstream ss;
+    ss << std::setfill('0') << std::setw(2) << localtm->tm_hour << ":"
+        << std::setfill('0') << std::setw(2) << localtm->tm_min << ":"
+        << std::setfill('0') << std::setw(2) << localtm->tm_sec;
+
+    // return the formatted time string
+    return ss.str();
+}
+
+
+class LogWindow
+{
+public:
+    int x;
+
+    LogWindow(int x)
+    {
+        this->x = x;
+    }
+
+    void init_draw()
+    {
+        int tmp_x = this->x;
+        int tmp_y = 1;
+    }
+};
+
+
 // draw frame with user input text
 void draw_frame(COORD screen_size)
 {
-    frame_data.assign(screen_size.X * screen_size.Y, ' ');
+    // frame_data.assign(screen_size.X * screen_size.Y, ' ');
 
-    draw_char(80, 0, 'H');
+    draw_char(75, 0, 'H');
 
     draw_gauges();
 
-    // Draw input text at the bottom of the console
-    int input_line_index = screen_size.Y - 1;
-
-    for (size_t i = 0; i < input_text.size() && i < screen_size.X; ++i)
-    {
-        frame_data[input_line_index * screen_size.X + i] = input_text[i];
-    }
-
-    // Toggle cursor visibility
-    auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_toggle) > cursor_interval)
-    {
-        show_cursor = !show_cursor;
-        last_toggle = now;
-    }
-
-    if (cursor_position < screen_size.X)
-    {
-        if (show_cursor || cursor_position >= input_text.length())
-        {
-            frame_data[input_line_index * screen_size.X + cursor_position] = '_';
-        }
-    }
+    input_field.draw();
 }
 
 // function that will be called from a thread
@@ -331,12 +452,13 @@ void call_from_thread()
 
 int main()
 {
-    init_gauges();
-
     screen_size = get_screen_size();
     SetConsoleScreenBufferSize(first_buffer, screen_size);
     SetConsoleScreenBufferSize(second_buffer, screen_size);
     frame_data.resize(screen_size.X * screen_size.Y);
+
+    init_gauges();
+    init_input_field();
 
     random_device rd;  // Obtain a random number from hardware
     mt19937 gen(rd()); // Seed the generator
@@ -344,17 +466,18 @@ int main()
 
     int random_number = distr(gen);
 
-    std::thread t1(call_from_thread);
+    thread t1(call_from_thread);
 
-    // Flush the console input buffer to remove any existing inputs
+    // flush the console input buffer to remove any existing inputs
     FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
 
     // main rendering loop:
     while (true)
     {
-        handle_input();
+        now = chrono::steady_clock::now();
+        input_field.handle_input();
         draw_frame(screen_size);
-        swapBuffers();
+        swap_buffers();
         gauges[0].update_field_value(0, to_string((int)(distr(gen))));
     }
 
