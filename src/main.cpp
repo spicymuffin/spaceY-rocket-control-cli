@@ -16,6 +16,9 @@
 
 using namespace std;
 
+#define PADDING_HORIZONTAL 2
+#define PADDING_VERTICAL 1
+
 // drawing
 const unsigned FPS = 24;
 std::vector<char> frame_data;
@@ -37,6 +40,24 @@ auto second_buffer = CreateConsoleScreenBuffer(
 // assign switchable back buffer
 HANDLE back_buffer = second_buffer;
 bool buffer_switch = true;
+string get_current_time_string()
+{
+    // get the current time
+    time_t now = time(0);
+
+    // convert now to tm struct for local timezone
+    tm* localtm = localtime(&now);
+
+    // use a stringstream to format the time
+    stringstream ss;
+    ss << setfill('0') << setw(2) << localtm->tm_hour << ":"
+        << setfill('0') << setw(2) << localtm->tm_min << ":"
+        << setfill('0') << setw(2) << localtm->tm_sec;
+
+    // return the formatted time string
+    return ss.str();
+}
+
 
 // returns current window size in rows and columns
 COORD get_screen_size()
@@ -67,6 +88,13 @@ void draw_char(int x, int y, char c)
     frame_data[y * screen_size.X + x] = c;
 }
 
+
+
+int validate_command(string command)
+{
+
+}
+
 // Gauge
 // +----------------------------+
 // | Rocket status      (500ms) |
@@ -90,6 +118,9 @@ public:
     vector<string> field_names;
     vector<string> field_values;
 
+    int total_length;
+    int inner_length;
+
     Gauge() = default;
 
     Gauge(int x, int y, int field_cnt, int field_names_len, int field_values_len, string name = "Gauge", string updrate_ms = "500ms")
@@ -108,6 +139,9 @@ public:
 
         this->name.resize(field_names_len);
         this->updrate_ms.resize(field_values_len);
+
+        this->total_length = field_names_len + field_values_len + 2 + 2;
+        this->inner_length = field_names_len + field_values_len;
 
         for (auto& n : field_names)
         {
@@ -153,10 +187,6 @@ public:
     {
         int tmp_x = this->x;
         int tmp_y = this->y;
-
-        // using the correct total length for '-' characters
-        int total_length = field_names_len + field_values_len + 2 + 2;
-        int inner_length = field_names_len + field_values_len;
 
         draw_stick(tmp_x, tmp_y, total_length);
 
@@ -220,13 +250,134 @@ public:
             tmp_y++;
 
             // draw field value
-            for (int i = 0; i < field_values_len; i++)
+            for (int i = 0; i < field_cnt; i++)
             {
                 draw_char(tmp_x + 2 + field_names_len + i, tmp_y, field_values[field_index][i]);
             }
         }
     }
 };
+
+class ScrollingText
+{
+public:
+    int x;
+    int y;
+
+    int width;
+    int height;
+
+    vector<string> lines;
+
+    ScrollingText() = default;
+
+    ScrollingText(int x, int y, int width, int height, bool inverted = false)
+    {
+        this->x = x;
+        this->y = y;
+        this->width = width;
+        this->height = height;
+    }
+
+    void add_line(string line)
+    {
+        int start_pos = 0;
+        int line_length = line.length();
+
+        // process the line until all characters are accounted for
+        while (start_pos < line_length)
+        {
+            // find the next newline character from the current start position
+            int newline_pos = line.find('\n', start_pos);
+
+            // determine the end of the current segment to process (up to newline or end of line)
+            int end_pos = (newline_pos != string::npos) ? newline_pos : line_length;
+
+            // process the current segment
+            while (start_pos < end_pos)
+            {
+                // calculate the remaining characters in this segment
+                int remaining_chars = end_pos - start_pos;
+
+                // determine how many characters to take for this line segment, constrained by width
+                int segment_length = min(width, remaining_chars);
+
+                // extract the substring for the current segment
+                string segment = line.substr(start_pos, segment_length);
+
+                // append the segment to the lines vector
+                lines.insert(lines.begin(), segment);
+
+                // move the start position forward by the segment length
+                start_pos += segment_length;
+            }
+
+            // skip over the newline character if one was found
+            if (newline_pos != string::npos && start_pos == newline_pos)
+            {
+                start_pos++;
+            }
+
+            // if a newline was processed, add an empty line if it's the last character
+            if (start_pos == end_pos && newline_pos != string::npos)
+            {
+                lines.push_back("");
+            }
+        }
+    }
+
+
+    void erase()
+    {
+        int tmp_x = this->x;
+        int tmp_y = this->y;
+
+        for (int i = tmp_y + height - 1; i >= tmp_y; i--)
+        {
+            for (int j = 0; j < width; j++)
+            {
+                draw_char(tmp_x + j, tmp_y + i, ' ');
+            }
+        }
+    }
+
+    // updates and erases the previous frame at the same time
+    void draw()
+    {
+        int tmp_x = this->x;
+        int tmp_y = this->y;
+
+        int lines_read_ptr = 0;
+
+        for (int i = height; i >= tmp_y; i--)
+        {
+            if (lines_read_ptr < lines.size())
+            {
+                for (int j = 0; j < width; j++)
+                {
+                    if (j < lines[lines_read_ptr].length())
+                    {
+                        draw_char(tmp_x + j, tmp_y + i, lines[lines_read_ptr][j]);
+                    }
+                    else
+                    {
+                        draw_char(tmp_x + j, tmp_y + i, ' ');
+                    }
+                }
+                lines_read_ptr++;
+            }
+            else
+            {
+                for (int j = 0; j < width; j++)
+                {
+                    draw_char(tmp_x + j, tmp_y + i, ' ');
+                }
+            }
+        }
+    }
+};
+
+vector<ScrollingText> scrolling_texts;
 
 class InputField
 {
@@ -271,10 +422,16 @@ public:
                     switch (keyEvent.wVirtualKeyCode)
                     {
                     case VK_LEFT:
-                        if (cursor_position > 0) cursor_position--;
+                        if (cursor_position > 0)
+                        {
+                            cursor_position--;
+                        }
                         break;
                     case VK_RIGHT:
-                        if (cursor_position < input_text.length()) cursor_position++;
+                        if (cursor_position < input_text.length())
+                        {
+                            cursor_position++;
+                        }
                         break;
                     case VK_BACK:
                         if (!input_text.empty() && cursor_position > 0)
@@ -290,11 +447,15 @@ public:
                         }
                         break;
                     case VK_RETURN:
+
+                        scrolling_texts[0].add_line(get_current_time_string() + " > " + input_text);
+                        scrolling_texts[0].draw();
+
                         input_text = "";
                         cursor_position = 0;
                         break;
                     default:
-                        if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126)
+                        if (keyEvent.uChar.UnicodeChar >= 32 && keyEvent.uChar.UnicodeChar <= 126 && cursor_position < width)
                         {
                             input_text.insert(cursor_position, 1, keyEvent.uChar.UnicodeChar);
                             cursor_position++;
@@ -302,7 +463,6 @@ public:
                         break;
                     }
                 }
-                erase();
             }
         }
     }
@@ -342,7 +502,11 @@ public:
         // draw cursor
         if (cursor_position < screen_size.X)
         {
-            if (show_cursor)
+            if (cursor_position == width)
+            {
+                draw_char(tmp_x + cursor_position, tmp_y, ' ');
+            }
+            else if (show_cursor)
             {
                 draw_char(tmp_x + cursor_position, tmp_y, '_');
             }
@@ -353,34 +517,89 @@ public:
         }
     }
 
-    void draw_init()
+    void init_draw()
     {
 
     }
 };
+
+class CommandWindow
+{
+public:
+    int x;
+    int y;
+
+    ScrollingText log_window;
+
+    CommandWindow() = default;
+
+    CommandWindow(int x, int y)
+    {
+        this->x = x;
+        this->y = y;
+    }
+
+    void init_draw()
+    {
+        int tmp_x = this->x;
+        int tmp_y = this->y;
+
+        for (int i = tmp_y; i < screen_size.Y; i++)
+        {
+            draw_char(tmp_x, tmp_y + i, '|');
+        }
+    }
+};
+
 
 vector<Gauge> gauges;
 InputField input_field;
 
 void init_gauges()
 {
-    gauges.push_back(Gauge(0, 0, 4, 16, 8, "Gauge", "500ms"));
+    gauges.push_back(Gauge(PADDING_HORIZONTAL, PADDING_VERTICAL, 4, 16, 8, "Rocket status", "500ms"));
     gauges[0].set_field_name(0, "Data age");
     gauges[0].init_draw();
+
+    gauges.push_back(Gauge(PADDING_HORIZONTAL + gauges[0].total_length - 1, PADDING_VERTICAL, 3, 16, 8, "Acceleration", "750ms"));
+    gauges[1].set_field_name(0, "X");
+    gauges[1].set_field_name(1, "Y");
+    gauges[1].set_field_name(2, "Z");
+    gauges[1].init_draw();
+
+    gauges.push_back(Gauge(PADDING_HORIZONTAL + gauges[0].total_length - 1, PADDING_VERTICAL + 5, 3, 16, 8, "Gyro", "750ms"));
+    gauges[2].set_field_name(0, "X");
+    gauges[2].set_field_name(1, "Y");
+    gauges[2].set_field_name(2, "Z");
+    gauges[2].init_draw();
+
 }
 
 void draw_gauges()
 {
-    for (auto& gauge : gauges)
+    for (int i = 0; i < gauges.size(); i++)
     {
-        gauge.draw();
+        gauges[i].draw();
     }
+}
+
+void init_command_window()
+{
+    CommandWindow command_window = CommandWindow(75, 1);
+    command_window.init_draw();
 }
 
 void init_input_field()
 {
-    input_field = InputField(75, screen_size.Y - 2, 16);
-    input_field.draw_init();
+    input_field = InputField(78, screen_size.Y - 1 - PADDING_VERTICAL, 40);
+    input_field.init_draw();
+}
+
+void init_scrolling_texts()
+{
+    scrolling_texts.push_back(ScrollingText(78, PADDING_VERTICAL, 40, screen_size.Y - 4));
+    scrolling_texts[0].add_line("This is a test line\naaaaaaaaa\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    scrolling_texts[0].draw();
 }
 
 class Command
@@ -393,49 +612,12 @@ class Log
 
 };
 
-std::string get_current_time_string()
-{
-    // get the current time
-    time_t now = time(0);
-
-    // convert now to tm struct for local timezone
-    tm* localtm = localtime(&now);
-
-    // use a stringstream to format the time
-    std::stringstream ss;
-    ss << std::setfill('0') << std::setw(2) << localtm->tm_hour << ":"
-        << std::setfill('0') << std::setw(2) << localtm->tm_min << ":"
-        << std::setfill('0') << std::setw(2) << localtm->tm_sec;
-
-    // return the formatted time string
-    return ss.str();
-}
-
-
-class LogWindow
-{
-public:
-    int x;
-
-    LogWindow(int x)
-    {
-        this->x = x;
-    }
-
-    void init_draw()
-    {
-        int tmp_x = this->x;
-        int tmp_y = 1;
-    }
-};
-
-
 // draw frame with user input text
 void draw_frame(COORD screen_size)
 {
     // frame_data.assign(screen_size.X * screen_size.Y, ' ');
 
-    draw_char(75, 0, 'H');
+    draw_char(75, 1, 'H');
 
     draw_gauges();
 
@@ -450,8 +632,32 @@ void call_from_thread()
     }
 }
 
+void setup_console()
+{
+    COORD bufferSize = get_screen_size();
+    SetConsoleScreenBufferSize(first_buffer, bufferSize);
+    SetConsoleScreenBufferSize(second_buffer, bufferSize);
+
+    // Clearing any unintended output before we start drawing
+    system("cls");  // Clears the console
+
+    // Ensuring cursor is positioned at the beginning to avoid initial prints messing up the buffer
+    SetConsoleCursorPosition(first_buffer, { 0, 0 });
+    SetConsoleCursorPosition(second_buffer, { 0, 0 });
+}
+
+void make_console_unresizable()
+{
+    HWND consoleWindow = GetConsoleWindow();  // Get the console window handle
+    LONG style = GetWindowLong(consoleWindow, GWL_STYLE);  // Get current window style
+    style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);  // Remove resizing and maximize capabilities
+    SetWindowLong(consoleWindow, GWL_STYLE, style);  // Set the new style
+    SetWindowPos(consoleWindow, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);  // Apply the new style
+}
+
 int main()
 {
+    make_console_unresizable();
     screen_size = get_screen_size();
     SetConsoleScreenBufferSize(first_buffer, screen_size);
     SetConsoleScreenBufferSize(second_buffer, screen_size);
@@ -459,6 +665,8 @@ int main()
 
     init_gauges();
     init_input_field();
+    init_command_window();
+    init_scrolling_texts();
 
     random_device rd;  // Obtain a random number from hardware
     mt19937 gen(rd()); // Seed the generator
