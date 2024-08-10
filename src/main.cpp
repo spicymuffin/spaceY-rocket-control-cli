@@ -95,26 +95,59 @@ uint16_t assemble_uint16_t(const std::string& str)
     return result;
 }
 
-bool check_provider_id_validity()
+uint16_t assemble_uint16_t(uint8_t high_byte, uint8_t low_byte)
 {
-
+    return (static_cast<uint16_t>(high_byte) << 8) | low_byte;
 }
 
-bool check_command_id_validity()
+uint16_t assemble_uint16_t(char high_byte, char low_byte)
 {
-
+    return (static_cast<uint16_t>((uint8_t)(high_byte)) << 8) | (uint8_t)(low_byte);
 }
 
-bool check_crc()
+string uint16_t_to_string(uint16_t value)
 {
+    // extract high byte (8 most significant bits)
+    char high_byte = static_cast<char>((value >> 8) & 0xFF);
 
+    // extract low byte (8 least significant bits)
+    char low_byte = static_cast<char>(value & 0xFF);
+
+    // construct string
+    return std::string{ high_byte, low_byte };
 }
 
+// used to send commands to the rocket
+class GenericCommand
+{
+public:
+    uint16_t command_id;
+    uint16_t argument;
+    uint8_t data_segment_size;
+
+    // yes, bad practice, but im tired
+    // this code is a mess anyway
+    /// TODO: hard code a command handler for each of the commands, each command handler just needs
+    /// to read the data segment and post it to gauges
+    void (*handler_func_ptr)();
+
+    GenericCommand() = default;
+
+    GenericCommand(uint16_t command_id, uint8_t data_segment_size, void (*handler_func_ptr)())
+    {
+        this->command_id = command_id;
+        this->data_segment_size = data_segment_size;
+        this->handler_func_ptr = handler_func_ptr;
+    }
+};
+
+// just holds the provider data
 class GenericProvider
 {
+public:
     uint16_t provider_id;
 
-    unordered_map<uint16_t, uint16_t> command_map;
+    unordered_map<string, GenericCommand> command_map;
 
     GenericProvider() = default;
 
@@ -124,55 +157,74 @@ class GenericProvider
     }
 };
 
-
-class GenericCommand
-{
-public:
-    uint16_t command_id;
-    uint16_t argument;
-
-    GenericCommand() = default;
-
-    GenericCommand(uint16_t provider_id, uint16_t command_id, uint16_t argument)
-    {
-        this->provider_id = provider_id;
-        this->command_id = command_id;
-        this->argument = argument;
-    }
-};
-
-class GenericReply
-{
-
-};
-
-unordered_map<string, GenericCommand> command_map = {
-    {"iudt", GenericCommand()}
-};
-
+unordered_map<string, GenericProvider> provider_map;
 vector<GenericProvider> generic_providers;
 vector<GenericCommand> generic_commands;
-vector<GenericReply> generic_replies;
 
-void init_generic_command()
+void init_providers()
 {
-    generic_commands.push_back(GenericCommand());
+    provider_map = {
+    {"ac", GenericProvider(assemble_uint16_t("ac"))}, // accel
+    {"gy", GenericProvider(assemble_uint16_t("gy"))}, // accel
+    {"pr", GenericProvider(assemble_uint16_t("pr"))}, // parachute
+    {"sr", GenericProvider(assemble_uint16_t("sr"))}, // stage release
+    {"br", GenericProvider(assemble_uint16_t("br"))}, // barometer
+    {"ps", GenericProvider(assemble_uint16_t("ps"))}, // pressure meter
+    };
+
+    provider_map["ac"].command_map = {
+        {"dt", GenericCommand(assemble_uint16_t("dt"), 12, nullptr)}, // dt is command_id, 12 is data segment size in bytes (4 per axis?)
+    };
+
+    provider_map["gy"].command_map = {
+        {"dt", GenericCommand(assemble_uint16_t("dt"), 12, nullptr)}, // dt is command_id, 12 is data segment size in bytes (4 per axis?)
+    };
+
+    provider_map["pr"].command_map = {
+        {"op", GenericCommand(assemble_uint16_t("op"), 0, nullptr)}, // op is command_id, 0 is data segment size in bytes
+        {"cl", GenericCommand(assemble_uint16_t("cl"), 0, nullptr)}, // cl is command_id, 0 is data segment size in bytes
+    };
+
+    provider_map["sr"].command_map = {
+        {"op", GenericCommand(assemble_uint16_t("op"), 0, nullptr)}, // op is command_id, 0 is data segment size in bytes
+        {"cl", GenericCommand(assemble_uint16_t("cl"), 0, nullptr)}, // cl is command_id, 0 is data segment size in bytes
+    };
+
+    provider_map["br"].command_map = {
+        {"dt", GenericCommand(assemble_uint16_t("dt"), 2, nullptr)}, // dt is command_id, 2 is data segment size in bytes
+    };
+
+    provider_map["ps"].command_map = {
+        {"dt", GenericCommand(assemble_uint16_t("dt"), 2, nullptr)}, // dt is command_id, 2 is data segment size in bytes
+    };
 }
 
-void init_generic_reply()
+bool check_provider_id_validity(uint16_t provider_id)
 {
+    string p = uint16_t_to_string(provider_id);
 
+    if (provider_map.find(p) == provider_map.end())
+    {
+        return false;
+    }
 }
 
-struct packet_parse_result
+
+bool check_command_id_validity(uint16_t provider_id, uint16_t command_id)
 {
-    uint16_t provider_id;
-    uint16_t command_id;
-};
+    string p = uint16_t_to_string(provider_id);
+    string c = uint16_t_to_string(command_id);
+
+    if (provider_map[p].command_map.find(c) == provider_map[p].command_map.end())
+    {
+        return false;
+    }
+}
+
 
 enum comms_state
 {
-    awaiting_reply,
+    awaiting_command_reply,
     idle,
 };
 
@@ -183,7 +235,10 @@ enum packet_validation_state
     expecting_marker_end,
 };
 
-packet_parse_result pr;
+uint8_t find_data_segment_size(uint16_t provider_id, uint16_t command_id)
+{
+    return 0;
+}
 
 comms_state cs = idle;
 
@@ -194,14 +249,17 @@ bool start_marker_found = false;
 uint16_t oldest_start_marker_ptr = 0;
 
 uint8_t packet_data_segment_read_cnt = 0;
+uint8_t packet_data_segment_size = 0;
+
 uint16_t packet_data_segment_start_ptr = 0;
 
 uint16_t comms_rcv_buffer_write_ptr = 0;
 
+uint16_t last_sent_provider_id = 0;
+uint16_t last_sent_command_id = 0;
+
 vector<vector<uint16_t>> comms_snd_buffer;
 char comms_rcv_buffer[COMMS_RCV_BUFFER_SIZE];
-
-uint16_t packet_validation_ptr = 0;
 
 inline void comms_rcv_buffer_move_ptr_right(uint16_t& ptr, uint16_t dst)
 {
@@ -224,6 +282,7 @@ inline char comms_rcv_buffer_peek_left(uint16_t ptr, uint16_t dst)
     return comms_rcv_buffer[(ptr + COMMS_RCV_BUFFER_SIZE - dst) % COMMS_RCV_BUFFER_SIZE];
 }
 
+/// TODO: implement uart_is_readable and uart_getc (or equivalent functions from winapi)
 bool uart_is_readable()
 {
     return true;
@@ -238,7 +297,7 @@ void comms_update()
 {
     switch (cs)
     {
-    case awaiting_reply:
+    case awaiting_command_reply:
         while (uart_is_readable())
         {
             comms_rcv_buffer[comms_rcv_buffer_write_ptr] = uart_getc();
@@ -282,11 +341,42 @@ void comms_update()
                     {
                         packet_data_segment_start_ptr = packet_validation_ptr;
                     }
+                    // first 4 bytes correspond to provider_id and command_id
+                    if (packet_data_segment_read_cnt == 4)
+                    {
+                        // assemble the provider id and the command id of the packet we just read
+                        uint16_t provider_id = assemble_uint16_t(
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 0),
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 1)
+                        );
+
+                        uint16_t command_id = assemble_uint16_t(
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 2),
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 3)
+                        );
+
+                        // if the provider id is invalid, reset validation state to start marker
+                        if (!check_provider_id_validity(provider_id))
+                        {
+                            // maybe do some logging that a packet arrived but it was broken?
+                            vs = expecting_marker_start;
+                            break;
+                        }
+                        if (!check_command_id_validity(provider_id, command_id))
+                        {
+                            // maybe do some logging that a packet arrived but it was broken?
+                            vs = expecting_marker_start;
+                            break;
+                        }
+                        packet_data_segment_size = find_data_segment_size(provider_id, command_id);
+                    }
                     // if it's the last character of the data segment, move to the next state
-                    else if (packet_data_segment_read_cnt == PACKET_LENGTH)
+                    if (packet_data_segment_read_cnt == packet_data_segment_size)
                     {
                         // reset the data segment read counter for later
                         packet_data_segment_read_cnt = 0;
+                        // reset the data segment size for later (bc we will never reach the if statement with packet_data_segment_read_cnt = 0)
+                        packet_data_segment_size = 0;
                         vs = expecting_marker_end;
                     }
                     break;
@@ -296,13 +386,29 @@ void comms_update()
                     // packet is valid
                     if (current == MARKER_END)
                     {
-                        ppr = parse_packet(packet_data_segment_start_ptr);
                         vs = expecting_marker_start;
 
-                        // start execution of the command specified in parsed packet
-                        // execute_command(ppr.provider_id, ppr.command_id, ppr.argument);
+                        uint16_t provider_id = assemble_uint16_t(
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 0),
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 1)
+                        );
+
+                        uint16_t command_id = assemble_uint16_t(
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 2),
+                            comms_rcv_buffer_peek_right(packet_data_segment_start_ptr, 3)
+                        );
+
+                        // compare packet's provider_id and command_id with last sent packet
+                        // if they match, we got a correct reply
+                        if (last_sent_provider_id == provider_id && last_sent_command_id == command_id)
+                        {
+                            /// TODO: call the handler function for the command
+                            // handle_reply();
+                            cs = idle;
+                        }
                     }
-                    // packet ended prematurely
+
+                    // packet end marker is not in the right place
                     else
                     {
                         // move validation pointer to the oldest start marker
@@ -316,6 +422,9 @@ void comms_update()
             }
         }
     case idle:
+        /// TODO: dequeue the next command from the command queue and send it
+        /// TODO: also periodically send commands to the rocket (update frequency in the gauge is basically for this)
+        /// it should send requests peridically so we can check what the rocket is doing
         break;
     }
 }
@@ -327,13 +436,6 @@ void draw_char(int x, int y, char c)
 {
     y++;
     frame_data[y * screen_size.X + x] = c;
-}
-
-
-
-int validate_command(string command)
-{
-
 }
 
 // Gauge
@@ -692,6 +794,9 @@ public:
                         scrolling_texts[0].add_line(get_current_time_string() + " > " + input_text);
                         scrolling_texts[0].draw();
 
+                        /// TODO: validate the command from user input
+                        // to do this properly we need a lot of code
+
                         input_text = "";
                         cursor_position = 0;
                         break;
@@ -903,6 +1008,8 @@ int main()
     SetConsoleScreenBufferSize(first_buffer, screen_size);
     SetConsoleScreenBufferSize(second_buffer, screen_size);
     frame_data.resize(screen_size.X * screen_size.Y);
+
+    init_providers();
 
     init_gauges();
     init_input_field();
