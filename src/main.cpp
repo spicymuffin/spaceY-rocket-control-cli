@@ -14,6 +14,10 @@
 #include <iomanip>
 #include <sstream>
 
+#include <unordered_map>
+
+#include "param.h"
+
 using namespace std;
 
 #define PADDING_HORIZONTAL 2
@@ -79,6 +83,243 @@ void swap_buffers()
     buffer_switch = !buffer_switch;
     this_thread::sleep_for(chrono::milliseconds(1000 / FPS));
 }
+
+uint16_t assemble_uint16_t(const std::string& str)
+{
+    uint8_t first_byte = static_cast<uint8_t>(str[0]);
+    uint8_t second_byte = static_cast<uint8_t>(str[1]);
+
+    // assemble into uint16_t
+    uint16_t result = (static_cast<uint16_t>(first_byte) << 8) | second_byte;
+
+    return result;
+}
+
+bool check_provider_id_validity()
+{
+
+}
+
+bool check_command_id_validity()
+{
+
+}
+
+bool check_crc()
+{
+
+}
+
+class GenericProvider
+{
+    uint16_t provider_id;
+
+    unordered_map<uint16_t, uint16_t> command_map;
+
+    GenericProvider() = default;
+
+    GenericProvider(uint16_t provider_id)
+    {
+        this->provider_id = provider_id;
+    }
+};
+
+
+class GenericCommand
+{
+public:
+    uint16_t command_id;
+    uint16_t argument;
+
+    GenericCommand() = default;
+
+    GenericCommand(uint16_t provider_id, uint16_t command_id, uint16_t argument)
+    {
+        this->provider_id = provider_id;
+        this->command_id = command_id;
+        this->argument = argument;
+    }
+};
+
+class GenericReply
+{
+
+};
+
+unordered_map<string, GenericCommand> command_map = {
+    {"iudt", GenericCommand()}
+};
+
+vector<GenericProvider> generic_providers;
+vector<GenericCommand> generic_commands;
+vector<GenericReply> generic_replies;
+
+void init_generic_command()
+{
+    generic_commands.push_back(GenericCommand());
+}
+
+void init_generic_reply()
+{
+
+}
+
+struct packet_parse_result
+{
+    uint16_t provider_id;
+    uint16_t command_id;
+};
+
+enum comms_state
+{
+    awaiting_reply,
+    idle,
+};
+
+enum packet_validation_state
+{
+    expecting_marker_start,
+    in_packet,
+    expecting_marker_end,
+};
+
+packet_parse_result pr;
+
+comms_state cs = idle;
+
+packet_validation_state vs = expecting_marker_start;
+
+uint16_t packet_validation_ptr = 0;
+bool start_marker_found = false;
+uint16_t oldest_start_marker_ptr = 0;
+
+uint8_t packet_data_segment_read_cnt = 0;
+uint16_t packet_data_segment_start_ptr = 0;
+
+uint16_t comms_rcv_buffer_write_ptr = 0;
+
+vector<vector<uint16_t>> comms_snd_buffer;
+char comms_rcv_buffer[COMMS_RCV_BUFFER_SIZE];
+
+uint16_t packet_validation_ptr = 0;
+
+inline void comms_rcv_buffer_move_ptr_right(uint16_t& ptr, uint16_t dst)
+{
+    ptr = (ptr + dst) % COMMS_RCV_BUFFER_SIZE;
+}
+
+inline void comms_rcv_buffer_move_ptr_left(uint16_t& ptr, uint16_t dst)
+{
+    // handling potential negative result by adding COMMS_RCV_BUFFER_SIZE before modulo
+    ptr = (ptr + COMMS_RCV_BUFFER_SIZE - dst) % COMMS_RCV_BUFFER_SIZE;
+}
+
+inline char comms_rcv_buffer_peek_right(uint16_t ptr, uint16_t dst)
+{
+    return comms_rcv_buffer[(ptr + dst) % COMMS_RCV_BUFFER_SIZE];
+}
+
+inline char comms_rcv_buffer_peek_left(uint16_t ptr, uint16_t dst)
+{
+    return comms_rcv_buffer[(ptr + COMMS_RCV_BUFFER_SIZE - dst) % COMMS_RCV_BUFFER_SIZE];
+}
+
+bool uart_is_readable()
+{
+    return true;
+}
+
+char uart_getc()
+{
+    return 'a';
+}
+
+void comms_update()
+{
+    switch (cs)
+    {
+    case awaiting_reply:
+        while (uart_is_readable())
+        {
+            comms_rcv_buffer[comms_rcv_buffer_write_ptr] = uart_getc();
+            comms_rcv_buffer_move_ptr_right(comms_rcv_buffer_write_ptr, 1);
+
+            for (
+                packet_validation_ptr = (comms_rcv_buffer_write_ptr + COMMS_RCV_BUFFER_SIZE - 1) % COMMS_RCV_BUFFER_SIZE;
+                packet_validation_ptr != comms_rcv_buffer_write_ptr;
+                comms_rcv_buffer_move_ptr_right(packet_validation_ptr, 1)
+                )
+            {
+                char current = comms_rcv_buffer[packet_validation_ptr];
+
+                // record the oldest start marker pointer that we have found inside the packet that we are currently validating
+                // because it might be the start of a new (valid) packet
+                if (current == MARKER_START && !start_marker_found && vs != expecting_marker_start)
+                {
+                    start_marker_found = true;
+                    oldest_start_marker_ptr = packet_validation_ptr;
+                }
+
+                switch (vs)
+                {
+                case expecting_marker_start:
+
+                    // packet started
+                    if (current == MARKER_START)
+                    {
+                        vs = in_packet;
+                    }
+                    // else the packet is bad, ignore the character
+                    break;
+
+                case in_packet:
+
+                    // we read one character of the data segment
+                    packet_data_segment_read_cnt++;
+
+                    // if it's the first character of the data segment, record the start pointer
+                    if (packet_data_segment_read_cnt == 1)
+                    {
+                        packet_data_segment_start_ptr = packet_validation_ptr;
+                    }
+                    // if it's the last character of the data segment, move to the next state
+                    else if (packet_data_segment_read_cnt == PACKET_LENGTH)
+                    {
+                        // reset the data segment read counter for later
+                        packet_data_segment_read_cnt = 0;
+                        vs = expecting_marker_end;
+                    }
+                    break;
+
+                case expecting_marker_end:
+
+                    // packet is valid
+                    if (current == MARKER_END)
+                    {
+                        ppr = parse_packet(packet_data_segment_start_ptr);
+                        vs = expecting_marker_start;
+
+                        // start execution of the command specified in parsed packet
+                        // execute_command(ppr.provider_id, ppr.command_id, ppr.argument);
+                    }
+                    // packet ended prematurely
+                    else
+                    {
+                        // move validation pointer to the oldest start marker
+                        // because it might be the start of a new (valid) packet
+                        packet_validation_ptr = oldest_start_marker_ptr;
+                        vs = expecting_marker_start;
+                    }
+
+                    break;
+                }
+            }
+        }
+    case idle:
+        break;
+    }
+}
+
 
 COORD screen_size;
 
